@@ -18,6 +18,7 @@ pub trait UserRepositoryTrait {
     fn new(db_conn: &Arc<Database>) -> Self;
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, DbError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, DbError>;
+    async fn find_by_google_id(&self, google_id: &str) -> Result<Option<User>, DbError>;
     #[allow(dead_code)]
     async fn find_by_id(&self, id: ObjectId) -> Result<Option<User>, DbError>;
     async fn find_all_except(&self, except_id: ObjectId) -> Result<Vec<User>, DbError>;
@@ -46,6 +47,14 @@ impl UserRepositoryTrait for UserRepository {
 
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, DbError> {
         let user = self.collection.find_one(doc! { "email": email }).await?;
+        Ok(user)
+    }
+
+    async fn find_by_google_id(&self, google_id: &str) -> Result<Option<User>, DbError> {
+        let user = self
+            .collection
+            .find_one(doc! { "googleId": google_id })
+            .await?;
         Ok(user)
     }
 

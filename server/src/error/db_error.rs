@@ -20,9 +20,19 @@ pub enum DbError {
 
 impl IntoResponse for DbError {
     fn into_response(self) -> Response {
+        if let Self::MongoError(error) = &self {
+            if matches!(error.kind.as_ref(), mongodb::error::ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write)) if write.code == 11000)
+            {
+                return ApiErrorResponse::send(
+                    StatusCode::CONFLICT.as_u16(),
+                    Some("This username or email is already registered".into()),
+                );
+            }
+        }
+        tracing::error!(error = %self, "Database operation failed");
         ApiErrorResponse::send(
             StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-            Some(self.to_string()),
+            Some("Database operation failed. Please try again.".into()),
         )
     }
 }

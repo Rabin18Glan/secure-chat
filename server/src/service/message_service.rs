@@ -22,6 +22,13 @@ impl MessageService {
     }
 
     pub async fn add_message(&self, payload: AddMessageDto) -> Result<MessageStatusDto, ApiError> {
+        validate_parties(&payload.from, &payload.to)?;
+        if payload.message.trim().is_empty() || payload.message.len() > 16_384 {
+            return Err(crate::error::user_error::UserError::InvalidInput(
+                "Message must contain 1–16384 bytes".into(),
+            )
+            .into());
+        }
         let sender_oid =
             ObjectId::parse_str(&payload.from).map_err(|_| MessageError::InvalidUserId)?;
 
@@ -47,6 +54,7 @@ impl MessageService {
         &self,
         payload: GetMessagesDto,
     ) -> Result<Vec<ProjectedMessageDto>, ApiError> {
+        validate_parties(&payload.from, &payload.to)?;
         let messages = self
             .message_repo
             .find_between_users(&payload.from, &payload.to)
@@ -64,5 +72,29 @@ impl MessageService {
             .collect();
 
         Ok(projected)
+    }
+}
+
+fn validate_parties(from: &str, to: &str) -> Result<(), ApiError> {
+    ObjectId::parse_str(from).map_err(|_| MessageError::InvalidUserId)?;
+    ObjectId::parse_str(to).map_err(|_| MessageError::InvalidUserId)?;
+    if from == to {
+        return Err(crate::error::user_error::UserError::InvalidInput(
+            "Choose another user to message".into(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn message_parties_must_be_valid_and_distinct() {
+        let from = "507f1f77bcf86cd799439011";
+        assert!(validate_parties(from, "507f1f77bcf86cd799439012").is_ok());
+        assert!(validate_parties(from, "invalid").is_err());
+        assert!(validate_parties(from, from).is_err());
     }
 }

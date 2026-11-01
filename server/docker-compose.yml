@@ -1,0 +1,42 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-5000}:5000"
+    environment:
+      - PORT=5000
+      - MONGO_URL=mongodb://db:27017
+      - DB_NAME=${DB_NAME:-chat}
+      - RUST_LOG=info
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  db:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_DATABASE: ${DB_NAME:-chat}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - app-network
+
+volumes:
+  mongo_data:
+
+networks:
+  app-network:
+    driver: bridge

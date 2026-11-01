@@ -1,0 +1,9 @@
+**
+!deploy/
+!deploy/frontend.Dockerfile
+!deploy/Caddyfile
+!client/
+!client/apps/
+!client/apps/website/
+!client/apps/website/dist/
+!client/apps/website/dist/**

@@ -1,0 +1,177 @@
+name: Deploy frontend and backend to EC2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - 'server/**'
+      - 'deploy/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-ec2
+  cancel-in-progress: false
+
+env:
+  EC2_HOST: ec2-32-236-18-31.ap-southeast-2.compute.amazonaws.com
+  EC2_USER: ec2-user
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      frontend_image: ${{ steps.images.outputs.frontend_repository }}@${{ steps.frontend.outputs.digest }}
+      backend_image: ${{ steps.images.outputs.backend_repository }}@${{ steps.backend.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          version: '1.4.0'
+          node-version: '24'
+          working-directory: client
+          cache: true
+          run-install: false
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: vp install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: client
+        run: vp run website#build
+
+      - name: Image names
+        id: images
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          repository=${REPOSITORY,,}
+          echo "frontend_repository=ghcr.io/$repository/frontend" >> "$GITHUB_OUTPUT"
+          echo "backend_repository=ghcr.io/$repository/backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=ghcr.io/$repository/frontend:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "backend=ghcr.io/$repository/backend:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v4
+        if: vars.EC2_PLATFORM == 'linux/arm64'
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish frontend
+        id: frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/frontend.Dockerfile
+          platforms: ${{ vars.EC2_PLATFORM || 'linux/amd64' }}
+          push: true
+          tags: ${{ steps.images.outputs.frontend }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Build and publish backend
+        id: backend
+        uses: docker/build-push-action@v7
+        with:
+          context: server
+          file: server/Dockerfile
+          target: prod
+          platforms: ${{ vars.EC2_PLATFORM || 'linux/amd64' }}
+          push: true
+          tags: ${{ steps.images.outputs.backend }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare release and SSH configuration
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+          BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
+          APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+          FRONTEND_IMAGE: ${{ needs.build.outputs.frontend_image }}
+          BACKEND_IMAGE: ${{ needs.build.outputs.backend_image }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${SSH_PRIVATE_KEY:?Add the EC2_SSH_PRIVATE_KEY secret}"
+          : "${SSH_KNOWN_HOSTS:?Add the EC2_KNOWN_HOSTS secret}"
+          mkdir -p "$HOME/.ssh" "$RUNNER_TEMP/release"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/ec2_deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/ec2_deploy" >/dev/null
+          if [[ -n "$APP_DOMAIN" ]]; then
+            [[ "$APP_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] || { echo "APP_DOMAIN must be a hostname without a URL scheme or path" >&2; exit 1; }
+            site_address=$APP_DOMAIN
+            app_origin="https://$APP_DOMAIN"
+            cookie_secure=true
+          else
+            site_address="http://$EC2_HOST"
+            app_origin=$site_address
+            cookie_secure=false
+          fi
+          cp deploy/compose.yml deploy/deploy.sh "$RUNNER_TEMP/release/"
+          printf '%s\n' "$BACKEND_ENV" > "$RUNNER_TEMP/release/backend.env"
+          {
+            printf 'FRONTEND_IMAGE=%s\n' "$FRONTEND_IMAGE"
+            printf 'BACKEND_IMAGE=%s\n' "$BACKEND_IMAGE"
+            printf 'SITE_ADDRESS=%s\n' "$site_address"
+            printf 'APP_ORIGIN=%s\n' "$app_origin"
+            printf 'COOKIE_SECURE=%s\n' "$cookie_secure"
+            printf 'REGISTRY_USER=%s\n' "$REGISTRY_USER"
+          } > "$RUNNER_TEMP/release/release.env"
+          tar -czf "$RUNNER_TEMP/release.tgz" -C "$RUNNER_TEMP/release" .
+
+      - name: Upload and deploy release
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          release_id="$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          ssh_options=(-i "$HOME/.ssh/ec2_deploy" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          target="$EC2_USER@$EC2_HOST"
+          ssh "${ssh_options[@]}" "$target" "umask 077; mkdir -p secure-chat/releases/$release_id"
+          scp "${ssh_options[@]}" "$RUNNER_TEMP/release.tgz" "$target:secure-chat/releases/$release_id/bundle.tgz"
+          ssh "${ssh_options[@]}" "$target" "tar -xzf secure-chat/releases/$release_id/bundle.tgz -C secure-chat/releases/$release_id"
+          printf '%s\n' "$GHCR_TOKEN" | ssh "${ssh_options[@]}" "$target" "bash secure-chat/releases/$release_id/deploy.sh"
+
+      - name: Remove deployment credentials
+        if: always()
+        run: |
+          rm -f "$HOME/.ssh/ec2_deploy" "$RUNNER_TEMP/release.tgz"
+          rm -rf "$RUNNER_TEMP/release"

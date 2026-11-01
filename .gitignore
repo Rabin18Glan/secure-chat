@@ -1,2 +1,5 @@
 node_modules
 .env
+*.pem
+deploy/*.env
+deploy/*.tgz

@@ -5,19 +5,19 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum ApiError {
     #[error(transparent)]
-    UserError(#[from] UserError),
+    User(#[from] UserError),
     #[error(transparent)]
-    MessageError(#[from] MessageError),
+    Message(#[from] MessageError),
     #[error(transparent)]
-    DbError(#[from] DbError),
+    Database(#[from] DbError),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
-            ApiError::UserError(error) => error.into_response(),
-            ApiError::MessageError(error) => error.into_response(),
-            ApiError::DbError(error) => error.into_response(),
+            ApiError::User(error) => error.into_response(),
+            ApiError::Message(error) => error.into_response(),
+            ApiError::Database(error) => error.into_response(),
         }
     }
 }

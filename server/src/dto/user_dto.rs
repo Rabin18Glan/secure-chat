@@ -14,6 +14,18 @@ pub struct UserLoginDto {
     pub password: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GoogleAuthDto {
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default, alias = "id_token", alias = "credential", alias = "token")]
+    pub credential: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default, alias = "redirect_uri")]
+    pub redirect_uri: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserDto {
     #[serde(rename = "_id")]
@@ -24,6 +36,8 @@ pub struct UserDto {
     pub is_avatar_image_set: bool,
     #[serde(rename = "avatarImage")]
     pub avatar_image: String,
+    #[serde(rename = "authProvider")]
+    pub auth_provider: String,
 }
 
 impl From<User> for UserDto {
@@ -34,6 +48,7 @@ impl From<User> for UserDto {
             email: user.email,
             is_avatar_image_set: user.is_avatar_image_set,
             avatar_image: user.avatar_image,
+            auth_provider: user.auth_provider,
         }
     }
 }
@@ -51,8 +66,10 @@ pub struct AuthResponseDto {
 pub struct UserListItemDto {
     #[serde(rename = "_id")]
     pub id: String,
-    pub email: String,
     pub username: String,
+    pub email: String,
+    #[serde(rename = "isAvatarImageSet")]
+    pub is_avatar_image_set: bool,
     #[serde(rename = "avatarImage")]
     pub avatar_image: String,
 }
@@ -61,8 +78,9 @@ impl From<User> for UserListItemDto {
     fn from(user: User) -> Self {
         Self {
             id: user.id.map(|oid| oid.to_hex()).unwrap_or_default(),
-            email: user.email,
             username: user.username,
+            email: user.email,
+            is_avatar_image_set: user.is_avatar_image_set,
             avatar_image: user.avatar_image,
         }
     }

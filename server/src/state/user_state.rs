@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
-pub type OnlineUsers = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
+pub type OnlineUsers = Arc<RwLock<HashMap<String, mpsc::Sender<Message>>>>;
 
 #[derive(Clone)]
 pub struct UserState {
